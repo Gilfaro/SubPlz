@@ -24,8 +24,9 @@ dependencies = [
     "tqdm ~= 4.67.1",
     "pysbd ~= 0.3.4",
     "stable-ts ~= 2.18.3",
-    "ats@git+https://github.com/kanjieater/ats#egg=master",
+    "ats@git+https://github.com/Gilfaro/ats#egg=master",
     # "ats @ file:///home/ke/code/AudiobookTextSync",
+    "stanza~=1.10.1",
 ]
 
 

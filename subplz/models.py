@@ -1,4 +1,4 @@
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, BatchedInferencePipeline
 import whisper
 from types import MethodType
 import torch
@@ -18,7 +18,8 @@ def faster_transcribe(self, audio, name, **args):
     # name = args.pop('name')
 
     args["log_prob_threshold"] = args.pop("logprob_threshold")
-    args["beam_size"] = args["beam_size"] if args["beam_size"] else 1
+    args["beam_size"] = args["beam_size"] if args["beam_size"] else 5
+    args["batch_size"] = args["batch_size"] if args["batch_size"] else 8
     args["patience"] = args["patience"] if args["patience"] else 1
     args["length_penalty"] = args["length_penalty"] if args["length_penalty"] else 1
     result = self.transcribe(audio, best_of=1, **args)
@@ -75,9 +76,10 @@ def get_model(backend):
         "float32" if not quantize else ("int8" if device == "cpu" else "float16")
     )
     if faster_whisper:
-        model = WhisperModel(
+        whisper_model = WhisperModel(
             model_name, device, local_files_only, compute_type, num_workers
         )
+        model = BatchedInferencePipeline(model=whisper_model)
         model.transcribe2 = model.transcribe
         model.faster_transcribe = MethodType(faster_transcribe, model)
     elif stable_ts:

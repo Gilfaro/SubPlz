@@ -35,7 +35,10 @@ dependencies = [
     "stable-ts ~= 2.19.0",
     "ctranslate2==4.4.0",
     "stanza~=1.10.1",
-
+    "pycountry~=24.6.1",
+    "fastdtw~=0.3.4",
+    "scikit-learn~=1.7.1",
+    "scipy~=1.16.0",
     # "ats @ file:///home/ke/code/AudiobookTextSync",
 ]
 

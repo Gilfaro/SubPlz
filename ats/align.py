@@ -1,92 +1,14 @@
+from sklearn.feature_extraction.text import TfidfVectorizer
+from fastdtw import fastdtw
+from scipy.spatial.distance import euclidean
 import numpy as np
-import sys
-from Bio import Align
-from Bio.Align import substitution_matrices
-from pprint import pprint
-from tqdm import tqdm
 
 
-def align_sub(coords, text, subs, thing=2):
-    current = [0, 0]
-    pos, toff = np.array([0, 0]), 0
-    p, gaps = np.array([0, 0]), np.array([0, 0])
-    unused = []
-    segments = [[]]
-    off, s = 0, 0
-    count = 0
-    for i in range(coords.shape[1]):
-        c = coords[:, i]
-        isgap = 0 in (c - p)
-
-        while current[1] < len(subs) and (pos[1] + len(subs[current[1]])) <= c[1]:
-            if current[0] >= len(text):
-                return segments[: len(text)]
-            pos[1] += len(subs[current[1]])
-            if isgap:
-                gaps += np.clip(pos - p, 0, None)[::-1]
-
-            diff = len(subs[current[1]]) + gaps[1] - gaps[0]
-            if diff > len(subs[current[1]]) // 4:
-                target = toff + diff + off
-                off = 0
-                c2 = 0
-                while current[0] < len(text) and target >= len(text[current[0]]):
-                    start, end = toff, len(text[current[0]])
-
-                    # ips, ipe = pos[0], pos[0] + (end - start)
-                    # for  r, j in gaps_text: # TODO:
-                    #     if (r >= ips) and (ipe <= j):
-                    #         print(ips, ipe, r, j)
-
-                    if (end - start) != 0:
-                        region = text[current[0]][start:end]
-                        prev = segments[-1]
-                        if end - start < thing or len(set(region) - set("。")) < thing:
-                            if len(
-                                prev
-                            ):  # and start - prev[-1][1] < 5: # Check for gaps
-                                prev[-1][1] = end
-                            else:
-                                prev.append([start, end, current[1]])
-                                # print("Hmm")
-                        else:
-                            # Two chunks stuck together, fix later
-                            if target > end:
-                                c2 += 1
-                            prev.append([start, end, current[1]])
-
-                    segments.append([])
-                    pos[0] += end - start
-                    target -= len(text[current[0]])
-                    current[0] += 1
-                    toff = 0
-                if c2:
-                    count += 1
-                pos[0] += target - toff
-                segments[-1].append([toff, target, current[1]])
-                toff = target
-            else:
-                unused.append(subs[current[1]])
-                prev = segments[-1]
-                if (
-                    toff >= len(text[current[0]]) // 2 and len(prev) and len(prev[-1])
-                ):  # Check for gaps
-                    prev[-1][1] += diff
-                    toff += diff
-                else:
-                    off += diff
-
-            current[1] += 1
-            s, gaps[...], p[:] = i, 0, np.maximum(pos, p)
-
-        if isgap:
-            gaps += (c - p)[::-1]
-        p = c
-
-    return segments[: len(text)]
+def compute_embeddings(texts):
+    vectorizer = TfidfVectorizer()
+    return vectorizer.fit_transform(texts).toarray()
 
 
-# """"""Heuristics"""""""
 def fix_punc(text, segments, prepend, append, nopend):
     for l, s in enumerate(segments):
         if not s:
@@ -112,29 +34,20 @@ def fix_punc(text, segments, prepend, append, nopend):
                         t[p[1] + 1] in nopend
                         and 0x4E00 > ord(t[p[1]])
                         or ord(t[p[1]]) > 0x9FAF
-                    ):  # Bail out if we end on a kanji
+                    ):
                         end += 1
-
                     while start > 0 and t[start] in nopend:
                         start -= 1
                     while end < len(t) - 1 and t[end] in nopend:
                         end += 1
 
                     if t[start] in prepend:
-                        if p[1] == start:
-                            break
                         p[1] = start
                     elif t[start] in append:
-                        if p[1] == start + 1:
-                            break
                         p[1] = start + 1
                     elif end < len(t) and t[end] in prepend:
-                        if p[1] == end:
-                            break
                         p[1] = end
                     elif end < len(t) and t[end] in append:
-                        if p[1] == end + 1:
-                            break
                         p[1] = end + 1
                     else:
                         break
@@ -145,56 +58,37 @@ def fix_punc(text, segments, prepend, append, nopend):
                 f[0] = p[1]
 
 
-def fix(lang, original, edited, segments):
-    for l, s in enumerate(segments):
-        o, e = lang.translate(original[l]), edited[l]
-        m = {}
-        oi, ei, ii = 0, 0, 0
-        for oi in range(len(o)):
-            if ei < len(e) and o[oi] == e[ei]:
-                m[ei] = oi
-                ei += 1
-            oi += 1
-        m[ei] = oi  # Snap to end
-        m[0] = 0  # Snap to zero
-
-        last = 0
-        for i in range(len(e)):
-            if i in m:
-                last = i
-            else:
-                m[i] = m[last]
-
-        for k, f in enumerate(s):
-            f[0] = m[min(max(f[0], 0), len(e))]
-            f[1] = m[min(max(f[1], 0), len(e))]
-
-
-# This is structured like this to deal with references later
 def align(model, lang, transcript, text, references, prepend, append, nopend):
-    aligner = Align.PairwiseAligner(
-        mode="global",
-        match_score=1,
-        open_gap_score=-0.8,
-        mismatch_score=-0.6,
-        extend_gap_score=-0.5,
-    )
+    transcript_clean = [lang.clean(t) for t in transcript]
+    text_clean = [lang.clean(t) for t in text]
 
-    transcript_clean = [lang.clean(i) for i in transcript]
-    transcript_joined = "".join(transcript_clean)
+    # Embedding computation
+    transcript_embeddings = compute_embeddings(transcript_clean)
+    text_embeddings = compute_embeddings(text_clean)
 
-    def inner(text):
-        text_clean = [lang.clean(i) for i in text]
-        text_joined = "".join(text_clean)
+    # Apply DTW
+    _, path = fastdtw(transcript_embeddings, text_embeddings, dist=euclidean)
 
-        if not len(text_joined) or not len(transcript_joined):
-            return []
-        alignment = aligner.align(text_joined, transcript_joined)[0]
-        coords = alignment.coordinates
+    # Build segment alignment
+    alignment_map = {}
+    for t_idx, txt_idx in path:
+        if txt_idx not in alignment_map:
+            alignment_map[txt_idx] = []
+        alignment_map[txt_idx].append(t_idx)
 
-        segments = align_sub(coords, text_clean, transcript_clean)
-        fix(lang, text, text_clean, segments)
-        fix_punc(text, segments, prepend, append, nopend)
-        return segments
+    segments = []
+    for i, sentence in enumerate(text_clean):
+        matched_idxs = alignment_map.get(i, [])
+        segs = []
+        if matched_idxs:
+            combined = "".join([transcript_clean[j] for j in matched_idxs])
+            start = 0
+            end = len(combined)
+            if end > 0:
+                segs.append([start, end, matched_idxs[0]])
+        segments.append(segs)
 
-    return inner(text), []  # references
+    # Apply punctuation heuristic
+    fix_punc(text, segments, prepend, append, nopend)
+
+    return segments, []  # references placeholder
